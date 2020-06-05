@@ -18,7 +18,8 @@ class EnvValues(object):
     with the -e or profiles etc.
         self._data is a dictionary with: {package: {var: value}}
             "package" can be None if the var is global.
-            "value" can be a list or a string. If it's a list the variable is appendable like PATH or PYTHONPATH
+            "value" can be a list or a string. If it's a list the variable
+            is appendable like PATH or PYTHONPATH
     """
 
     def __init__(self):
@@ -73,9 +74,9 @@ class EnvValues(object):
                 if isinstance(value, list):
                     value = "[%s]" % ",".join(value)
                 if package:
-                    result.append("%s:%s=%s" % (package, name, value.replace("\\", "/")))
+                    result.append("%s:%s=%s" % (package, name, value))
                 else:
-                    result.append("%s=%s" % (name, value.replace("\\", "/")))
+                    result.append("%s=%s" % (name, value))
 
         result = []
         # First the global vars
@@ -102,10 +103,7 @@ class EnvValues(object):
     def add(self, name, value, package=None):
         # New data, not previous value
         if name not in self._data[package]:
-            if isinstance(value, list):
-                self._data[package][name] = value
-            else:
-                self._data[package][name] = value.replace("\\", "/")
+            self._data[package][name] = value
         # There is data already
         else:
             # Only append at the end if we had a list
@@ -117,6 +115,16 @@ class EnvValues(object):
 
     def remove(self, name, package=None):
         del self._data[package][name]
+
+    def update_replace(self, key, value):
+        """ method useful for command "conan profile update"
+        to execute real update instead of soft update
+        """
+        if ":" in key:
+            package_name, key = key.split(":", 1)
+        else:
+            package_name, key = None, key
+        self._data[package_name][key] = value
 
     def update(self, env_obj):
         """accepts other EnvValues object or DepsEnvInfo
@@ -132,7 +140,6 @@ class EnvValues(object):
             # DepsEnvInfo. the OLD values are always kept, never overwrite,
             elif isinstance(env_obj, DepsEnvInfo):
                 for (name, value) in env_obj.vars.items():
-                    name = name.upper() if name.lower() == "path" else name
                     self.add(name, value)
             else:
                 raise ConanException("unknown env type: %s" % env_obj)
@@ -143,26 +150,30 @@ class EnvValues(object):
         ret = {}
         ret_multi = {}
         # First process the global variables
-        for package, pairs in self._sorted_data:
-            for name, value in pairs.items():
-                if package is None:
-                    if isinstance(value, list):
-                        ret_multi[name] = value
-                    else:
-                        ret[name] = value
+
+        global_pairs = self._data.get(None)
+        own_pairs = self._data.get(package_name)
+
+        if global_pairs:
+            for name, value in global_pairs.items():
+                if isinstance(value, list):
+                    ret_multi[name] = value
+                else:
+                    ret[name] = value
 
         # Then the package scoped vars, that will override the globals
-        for package, pairs in self._sorted_data:
-            for name, value in pairs.items():
-                if package == package_name:
-                    if isinstance(value, list):
-                        ret_multi[name] = value
-                        if name in ret:  # Already exists a global variable, remove it
-                            del ret[name]
-                    else:
-                        ret[name] = value
-                        if name in ret_multi:  # Already exists a list global variable, remove it
-                            del ret_multi[name]
+        if own_pairs:
+            for name, value in own_pairs.items():
+                if isinstance(value, list):
+                    ret_multi[name] = value
+                    if name in ret:  # Already exists a global variable, remove it
+                        del ret[name]
+                else:
+                    ret[name] = value
+                    if name in ret_multi:  # Already exists a list global variable, remove it
+                        del ret_multi[name]
+
+        # FIXME: This dict is only used doing a ret.update(ret_multi). Unnecessary?
         return ret, ret_multi
 
     def __repr__(self):
@@ -183,10 +194,17 @@ class EnvInfo(object):
     def __init__(self):
         self._values_ = {}
 
+    @staticmethod
+    def _adjust_casing(name):
+        """We don't want to mix "path" with "PATH", actually we don`t want to mix anything
+        with different casing. Furthermore in Windows all is uppercase, but managing all in
+        upper case will be breaking."""
+        return name.upper() if name.lower() == "path" else name
+
     def __getattr__(self, name):
         if name.startswith("_") and name.endswith("_"):
             return super(EnvInfo, self).__getattr__(name)
-
+        name = self._adjust_casing(name)
         attr = self._values_.get(name)
         if not attr:
             self._values_[name] = []
@@ -195,6 +213,7 @@ class EnvInfo(object):
     def __setattr__(self, name, value):
         if name.startswith("_") and name.endswith("_"):
             return super(EnvInfo, self).__setattr__(name, value)
+        name = self._adjust_casing(name)
         self._values_[name] = value
 
     @property
@@ -236,7 +255,7 @@ class DepsEnvInfo(EnvInfo):
                 else:
                     self.vars[varname] = merge_lists(self.vars[varname], [value])
             else:
-                logger.warn("DISCARDED variable %s=%s from %s" % (varname, value, pkg_name))
+                logger.warning("DISCARDED variable %s=%s from %s" % (varname, value, pkg_name))
 
     def update_deps_env_info(self, dep_env_info):
         assert isinstance(dep_env_info, DepsEnvInfo)
@@ -258,7 +277,7 @@ class DepsEnvInfo(EnvInfo):
                 env_info = EnvInfo()
             else:
                 var_name, value = line.split("=", 1)
-                if value[0] == "[" and value[-1] == "]":
+                if value and value[0] == "[" and value[-1] == "]":
                     # Take all the items between quotes
                     values = re.findall('"([^"]*)"', value[1:-1])
                     for val in values:

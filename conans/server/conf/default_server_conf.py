@@ -11,16 +11,15 @@ port: 9300
 public_port:
 host_name: localhost
 
-# Choose file adapter, "disk" for disk storage
 # Authorize timeout are seconds the client has to upload/download files until authorization expires
-store_adapter: disk
 authorize_timeout: 1800
 
 # Just for disk storage adapter
 # updown_secret is the key used to generate the upload/download authorization token
-disk_storage_path: ~/.conan_server/data
+disk_storage_path: ./data
 disk_authorize_timeout: 1800
 updown_secret: {updown_secret}
+
 
 # Check docs.conan.io to implement a different authenticator plugin for conan_server
 # if custom_authenticator is not specified, [users] section will be used to authenticate
@@ -54,7 +53,7 @@ updown_secret: {updown_secret}
 #
 #   opencv/*@lasote/testing: default_user default_user2
 #   internal/*@*/*: ?
-#   *:*@*/*: *
+#   */*@*/*: *
 #
 # By default all users can read all blocks
 #

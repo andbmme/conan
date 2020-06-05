@@ -14,11 +14,12 @@ class SConsGenerator(Generator):
                     '        "BINPATH"     : {info.bin_paths},\n'
                     '        "LIBS"        : {info.libs},\n'
                     '        "CPPDEFINES"  : {info.defines},\n'
-                    '        "CXXFLAGS"    : {info.cppflags},\n'
+                    '        "CXXFLAGS"    : {info.cxxflags},\n'
                     '        "CCFLAGS"     : {info.cflags},\n'
                     '        "SHLINKFLAGS" : {info.sharedlinkflags},\n'
                     '        "LINKFLAGS"   : {info.exelinkflags},\n'
-                    '    }},\n')
+                    '    }},\n'
+                    '    "{dep}_version" : "{info.version}",\n')
 
         sections = []
         sections.append("conan = {\n")

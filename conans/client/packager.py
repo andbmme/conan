@@ -1,89 +1,52 @@
 import os
-import shutil
 
-from conans.client import tools
-from conans.util.files import mkdir, save, rmdir
-from conans.util.log import logger
-from conans.paths import CONANINFO, CONAN_MANIFEST
-from conans.errors import ConanException, ConanExceptionInUserConanfileMethod, conanfile_exception_formatter
-from conans.model.build_info import DEFAULT_RES, DEFAULT_BIN, DEFAULT_LIB, DEFAULT_INCLUDE
+from conans.client.file_copier import FileCopier, report_copied_files
 from conans.model.manifest import FileTreeManifest
-from conans.client.output import ScopedOutput
-from conans.client.file_copier import FileCopier
+from conans.paths import CONANINFO
+from conans.util.files import mkdir, save
 
 
-def create_package(conanfile, source_folder, build_folder, package_folder, install_folder,
-                   output, local=False, copy_info=False):
-    """ copies built artifacts, libs, headers, data, etc from build_folder to
-    package folder
-    """
+def export_pkg(conanfile, package_id, src_package_folder, package_folder, hook_manager,
+               conanfile_path, ref):
     mkdir(package_folder)
+    conanfile.package_folder = package_folder
+    output = conanfile.output
+    output.info("Exporting to cache existing package from user folder")
+    output.info("Package folder %s" % package_folder)
+    hook_manager.execute("pre_package", conanfile=conanfile, conanfile_path=conanfile_path,
+                         reference=ref, package_id=package_id)
 
-    # Make the copy of all the patterns
-    output.info("Generating the package")
-    output.info("Package folder %s" % (package_folder))
+    copier = FileCopier([src_package_folder], package_folder)
+    copier("*", symlinks=True)
 
-    def wrap(dst_folder):
-        def new_method(pattern, src=""):
-            conanfile.copy(pattern, dst_folder, src)
-        return new_method
+    conanfile.package_folder = package_folder
+    hook_manager.execute("post_package", conanfile=conanfile, conanfile_path=conanfile_path,
+                         reference=ref, package_id=package_id)
 
-    # FIXME: Deprecate these methods. Not documented. Confusing. Rely on LINTER
-    conanfile.copy_headers = wrap(DEFAULT_INCLUDE)
-    conanfile.copy_libs = wrap(DEFAULT_LIB)
-    conanfile.copy_bins = wrap(DEFAULT_BIN)
-    conanfile.copy_res = wrap(DEFAULT_RES)
-    try:
-        package_output = ScopedOutput("%s package()" % output.scope, output)
-        output.highlight("Calling package()")
-        conanfile.package_folder = package_folder
-        conanfile.source_folder = source_folder
-        conanfile.build_folder = build_folder
+    save(os.path.join(package_folder, CONANINFO), conanfile.info.dumps())
+    manifest = FileTreeManifest.create(package_folder)
+    manifest.save(package_folder)
+    report_files_from_manifest(output, manifest)
 
-        if source_folder != build_folder:
-            conanfile.copy = FileCopier(source_folder, package_folder, build_folder)
-            with conanfile_exception_formatter(str(conanfile), "package"):
-                with tools.chdir(build_folder):
-                    conanfile.package()
-            conanfile.copy.report(package_output, warn=True)
-        conanfile.copy = FileCopier(build_folder, package_folder)
+    output.success("Package '%s' created" % package_id)
 
-        with tools.chdir(build_folder):
-            with conanfile_exception_formatter(str(conanfile), "package"):
-                conanfile.package()
-        conanfile.copy.report(package_output, warn=True)
-    except Exception as e:
-        if not local:
-            os.chdir(build_folder)
-            try:
-                rmdir(package_folder)
-            except Exception as e_rm:
-                output.error("Unable to remove package folder %s\n%s" % (package_folder, str(e_rm)))
-                output.warn("**** Please delete it manually ****")
-
-        if isinstance(e, ConanExceptionInUserConanfileMethod):
-            raise
-        raise ConanException(e)
-
-    _create_aux_files(install_folder, package_folder, conanfile, copy_info)
-    output.success("Package '%s' created" % os.path.basename(package_folder))
+    prev = manifest.summary_hash
+    output.info("Created package revision %s" % prev)
+    return prev
 
 
-def _create_aux_files(install_folder, package_folder, conanfile, copy_info):
-    """ auxiliary method that creates CONANINFO and manifest in
-    the package_folder
-    """
-    logger.debug("Creating config files to %s" % package_folder)
-    if copy_info:
-        try:
-            shutil.copy(os.path.join(install_folder, CONANINFO), package_folder)
-        except IOError:
-            raise ConanException("%s does not exist inside of your %s folder. "
-                                 "Try to re-build it again to solve it."
-                                 % (CONANINFO, install_folder))
-    else:
-        save(os.path.join(package_folder, CONANINFO), conanfile.info.dumps())
+def update_package_metadata(prev, layout, package_id, rrev):
+    with layout.update_metadata() as metadata:
+        metadata.packages[package_id].revision = prev
+        metadata.packages[package_id].recipe_revision = rrev
 
-    # Create the digest for the package
-    digest = FileTreeManifest.create(package_folder)
-    save(os.path.join(package_folder, CONAN_MANIFEST), str(digest))
+
+def report_files_from_manifest(output, manifest):
+    copied_files = list(manifest.files())
+    copied_files.remove(CONANINFO)
+
+    if not copied_files:
+        output.warn("No files in this package!")
+        return
+
+    report_copied_files(copied_files, output, message_suffix="Packaged")

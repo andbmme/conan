@@ -1,140 +1,71 @@
 import os
 import platform
 import re
-from subprocess import Popen, PIPE, STDOUT
 
+from conans.client.output import Color
+from conans.client.tools import detected_os, OSInfo
+from conans.client.tools.win import latest_visual_studio_version_installed
 from conans.model.version import Version
-from conans.tools import vs_installation_path
-
-
-def _execute(command):
-    proc = Popen(command, shell=True, bufsize=1, stdout=PIPE, stderr=STDOUT)
-
-    output_buffer = []
-    while True:
-        line = proc.stdout.readline()
-        if not line:
-            break
-        # output.write(line)
-        output_buffer.append(str(line))
-
-    proc.communicate()
-    return proc.returncode, "".join(output_buffer)
+from conans.util.conan_v2_mode import CONAN_V2_MODE_ENVVAR
+from conans.util.env_reader import get_env
+from conans.util.runners import detect_runner
 
 
 def _gcc_compiler(output, compiler_exe="gcc"):
+
     try:
-        _, out = _execute('%s -dumpversion' % compiler_exe)
+        if platform.system() == "Darwin":
+            # In Mac OS X check if gcc is a fronted using apple-clang
+            _, out = detect_runner("%s --version" % compiler_exe)
+            out = out.lower()
+            if "clang" in out:
+                return None
+
+        ret, out = detect_runner('%s -dumpversion' % compiler_exe)
+        if ret != 0:
+            return None
         compiler = "gcc"
-        installed_version = re.search("([0-9](\.[0-9])?)", out).group()
+        installed_version = re.search("([0-9]+(\.[0-9])?)", out).group()
         # Since GCC 7.1, -dumpversion return the major version number
         # only ("7"). We must use -dumpfullversion to get the full version
         # number ("7.1.1").
-        if len(installed_version) == 1:
-            _, out = _execute('%s -dumpfullversion' % compiler_exe)
-            installed_version = re.search("([0-9]\.[0-9])", out).group()
         if installed_version:
             output.success("Found %s %s" % (compiler, installed_version))
             return compiler, installed_version
-    except:
+    except Exception:
         return None
 
 
 def _clang_compiler(output, compiler_exe="clang"):
     try:
-        _, out = _execute('%s --version' % compiler_exe)
+        ret, out = detect_runner('%s --version' % compiler_exe)
+        if ret != 0:
+            return None
         if "Apple" in out:
             compiler = "apple-clang"
         elif "clang version" in out:
             compiler = "clang"
-        installed_version = re.search("([0-9]\.[0-9])", out).group()
+        installed_version = re.search("([0-9]+\.[0-9])", out).group()
         if installed_version:
             output.success("Found %s %s" % (compiler, installed_version))
             return compiler, installed_version
-    except:
+    except Exception:
         return None
-
-
-def _visual_compiler_cygwin(output, version):
-    if os.path.isfile("/proc/registry/HKEY_LOCAL_MACHINE/SOFTWARE/Microsoft/Windows/CurrentVersion/ProgramFilesDir (x86)"):
-        is_64bits = True
-    else:
-        is_64bits = False
-
-    if is_64bits:
-        key_name = r'HKEY_LOCAL_MACHINE\SOFTWARE\Wow6432Node\Microsoft\VisualStudio\SxS\VC7'
-    else:
-        key_name = r'HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\VisualStudio\SxS\VC7'
-
-    if not os.path.isfile("/proc/registry/" + key_name.replace('\\', '/') + "/" + version):
-        return None
-
-    installed_version = Version(version).major(fill=False)
-    compiler = "Visual Studio"
-    output.success("CYGWIN: Found %s %s" % (compiler, installed_version))
-    return compiler, installed_version
-
-
-def _visual_compiler(output, version):
-    'version have to be 8.0, or 9.0 or... anything .0'
-    if platform.system().startswith("CYGWIN"):
-        return _visual_compiler_cygwin(output, version)
-
-    if version == "15":
-        vs_path = os.getenv('vs150comntools')
-        path = vs_path or vs_installation_path("15")
-        if path:
-            compiler = "Visual Studio"
-            output.success("Found %s %s" % (compiler, "15"))
-            return compiler, "15"
-        return None
-
-    version = "%s.0" % version
-    from six.moves import winreg  # @UnresolvedImport
-    try:
-        hKey = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
-                              r"SOFTWARE\Microsoft\Windows\CurrentVersion")
-        winreg.QueryValueEx(hKey, "ProgramFilesDir (x86)")
-        is_64bits = True
-    except EnvironmentError:
-        is_64bits = False
-    finally:
-        winreg.CloseKey(hKey)
-
-    if is_64bits:
-        key_name = r'SOFTWARE\Wow6432Node\Microsoft\VisualStudio\SxS\VC7'
-    else:
-        key_name = r'HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\VisualStudio\SxS\VC7'
-
-    try:
-        key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_name)
-        winreg.QueryValueEx(key, version)
-
-        installed_version = Version(version).major(fill=False)
-        compiler = "Visual Studio"
-        output.success("Found %s %s" % (compiler, installed_version))
-        return compiler, installed_version
-    except EnvironmentError:
-        return None
-
-
-def _visual_compiler_last(output):
-    last_version = None
-    for version in ["8", "9", "10", "11", "12", "14", "15"]:
-        vs = _visual_compiler(output, version)
-        last_version = vs or last_version
-    return last_version
 
 
 def _sun_cc_compiler(output, compiler_exe="cc"):
     try:
-        _, out = _execute('%s -V' % compiler_exe)
+        _, out = detect_runner('%s -V' % compiler_exe)
         compiler = "sun-cc"
-        installed_version = re.search("([0-9]+\.[0-9]+)", out).group()
+        installed_version = re.search("Sun C.*([0-9]+\.[0-9]+)", out)
+        if installed_version:
+            installed_version = installed_version.group(1)
+        else:
+            installed_version = re.search("([0-9]+\.[0-9]+)", out).group()
         if installed_version:
             output.success("Found %s %s" % (compiler, installed_version))
             return compiler, installed_version
-    except:
+    except Exception:
         return None
 
 
@@ -145,7 +76,12 @@ def _get_default_compiler(output):
         output.info("CC and CXX: %s, %s " % (cc or "None", cxx or "None"))
         command = cc or cxx
         if "gcc" in command:
-            return _gcc_compiler(output, command)
+            gcc = _gcc_compiler(output, command)
+            if platform.system() == "Darwin" and gcc is None:
+                output.error(
+                    "%s detected as a frontend using apple-clang. Compiler not supported" % command
+                )
+            return gcc
         if "clang" in command.lower():
             return _clang_compiler(output, command)
         if platform.system() == "SunOS" and command.lower() == "cc":
@@ -155,7 +91,8 @@ def _get_default_compiler(output):
         return None
 
     if detected_os() == "Windows":
-        vs = _visual_compiler_last(output)
+        version = latest_visual_studio_version_installed(output)
+        vs = ('Visual Studio', version) if version else None
     gcc = _gcc_compiler(output)
     clang = _clang_compiler(output)
     if platform.system() == "SunOS":
@@ -171,20 +108,52 @@ def _get_default_compiler(output):
         return gcc or clang
 
 
-def _detect_compiler_version(result, output):
+def _get_profile_compiler_version(compiler, version, output):
+    major = version.split(".")[0]
+    if compiler == "clang" and int(major) >= 8:
+        output.info("clang>=8, using the major as version")
+        return major
+    elif compiler == "gcc" and int(major) >= 5:
+        output.info("gcc>=5, using the major as version")
+        return major
+    return version
+
+
+def _detect_compiler_version(result, output, profile_path):
     try:
         compiler, version = _get_default_compiler(output)
-    except:
+    except Exception:
         compiler, version = None, None
     if not compiler or not version:
         output.error("Unable to find a working compiler")
     else:
         result.append(("compiler", compiler))
-        result.append(("compiler.version", version))
+        result.append(("compiler.version",
+                       _get_profile_compiler_version(compiler, version, output)))
         if compiler == "apple-clang":
             result.append(("compiler.libcxx", "libc++"))
         elif compiler == "gcc":
-            result.append(("compiler.libcxx", "libstdc++"))
+            new_abi_available = Version(version) >= Version("5.1")
+            libcxx, old_abi = ('libstdc++11', False) if new_abi_available and get_env(CONAN_V2_MODE_ENVVAR, False)\
+                else ('libstdc++', True)
+            result.append(("compiler.libcxx", libcxx))
+            if old_abi and new_abi_available:
+                profile_name = os.path.basename(profile_path)
+                msg = """
+Conan detected a GCC version > 5 but has adjusted the 'compiler.libcxx' setting to
+'libstdc++' for backwards compatibility.
+Your compiler is likely using the new CXX11 ABI by default (libstdc++11).
+
+If you want Conan to use the new ABI for the {profile} profile, run:
+
+    $ conan profile update settings.compiler.libcxx=libstdc++11 {profile}
+
+Or edit '{profile_path}' and set compiler.libcxx=libstdc++11
+""".format(profile=profile_name, profile_path=profile_path)
+                output.writeln("\n************************* WARNING: GCC OLD ABI COMPATIBILITY "
+                               "***********************\n %s\n************************************"
+                               "************************************************\n\n\n" % msg,
+                               Color.BRIGHT_RED)
         elif compiler == "cc":
             if platform.system() == "SunOS":
                 result.append(("compiler.libstdcxx", "libstdcxx4"))
@@ -197,15 +166,6 @@ def _detect_compiler_version(result, output):
             result.append(("compiler.libcxx", "libCstd"))
 
 
-def detected_os():
-    result = platform.system()
-    if result == "Darwin":
-        return "Macos"
-    if result.startswith("CYGWIN"):
-        return "Windows"
-    return result
-
-
 def _detect_os_arch(result, output):
     architectures = {'i386': 'x86',
                      'i686': 'x86',
@@ -213,26 +173,37 @@ def _detect_os_arch(result, output):
                      'amd64': 'x86_64',
                      'aarch64': 'armv8',
                      'sun4v': 'sparc'}
+    the_os = detected_os()
+    result.append(("os", the_os))
+    result.append(("os_build", the_os))
 
-    result.append(("os", detected_os()))
-    arch = architectures.get(platform.machine().lower(), platform.machine().lower())
-    if arch.startswith('arm'):
-        for a in ("armv6", "armv7hf", "armv7", "armv8"):
-            if arch.startswith(a):
-                arch = a
-                break
-        else:
-            output.error("Your ARM '%s' architecture is probably not defined in settings.yml\n"
-                         "Please check your conan.conf and settings.yml files" % arch)
-    result.append(("arch", arch))
+    platform_machine = platform.machine().lower()
+    if platform_machine:
+        arch = architectures.get(platform_machine, platform_machine)
+        if arch.startswith('arm'):
+            for a in ("armv6", "armv7hf", "armv7", "armv8"):
+                if arch.startswith(a):
+                    arch = a
+                    break
+            else:
+                output.error("Your ARM '%s' architecture is probably not defined in settings.yml\n"
+                             "Please check your conan.conf and settings.yml files" % arch)
+        elif OSInfo().is_aix:
+            arch = OSInfo.get_aix_architecture() or arch
+
+        result.append(("arch", arch))
+        result.append(("arch_build", arch))
 
 
-def detect_defaults_settings(output):
+def detect_defaults_settings(output, profile_path):
     """ try to deduce current machine values without any constraints at all
+    :param output: Conan Output instance
+    :param profile_path: Conan profile file path
+    :return: A list with default settings
     """
     result = []
     _detect_os_arch(result, output)
-    _detect_compiler_version(result, output)
+    _detect_compiler_version(result, output, profile_path)
     result.append(("build_type", "Release"))
 
     return result

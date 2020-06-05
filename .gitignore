@@ -19,6 +19,7 @@ lib64/
 parts/
 sdist/
 var/
+venv/
 *.egg-info/
 .installed.cfg
 *.egg
@@ -42,6 +43,7 @@ htmlcov/
 nosetests.xml
 coverage.xml
 *,cover
+.pytest_cache/
 
 # Translations
 *.mo
@@ -83,6 +85,9 @@ conan.conf
 #Eclipse folder
 .settings
 
+#VScode folder
+.vscode
+
 #Generated certificate file
 cacert.pem
 
@@ -97,6 +102,8 @@ cacert.pem
 .bash_history
 .conan_server/
 .sudo_as_admin_successful
+.noseids
 
 # add excluded
 !conans/client/build
+!conans/test/unittests/client/build

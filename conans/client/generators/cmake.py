@@ -1,39 +1,70 @@
+from conans.client.generators.cmake_common import cmake_dependencies, cmake_dependency_vars, \
+    cmake_global_vars, cmake_macros, cmake_package_info, cmake_settings_info, cmake_user_info_vars, \
+    generate_targets_section, CMakeCommonMacros
 from conans.model import Generator
 from conans.paths import BUILD_INFO_CMAKE
-from conans.client.generators.cmake_common import cmake_dependency_vars,\
-    cmake_macros, generate_targets_section, cmake_dependencies, cmake_package_info,\
-    cmake_global_vars, cmake_user_info_vars, cmake_settings_info
 
 
 class DepsCppCmake(object):
     def __init__(self, cpp_info):
-        def multiline(field):
-            return "\n\t\t\t".join('"%s"' % p.replace("\\", "/") for p in field)
+        def join_paths(paths):
+            """
+            Paths are doubled quoted, and escaped (but spaces)
+            e.g: set(LIBFOO_INCLUDE_DIRS "/path/to/included/dir" "/path/to/included/dir2")
+            """
 
-        self.include_paths = multiline(cpp_info.include_paths)
-        self.lib_paths = multiline(cpp_info.lib_paths)
-        self.res_paths = multiline(cpp_info.res_paths)
-        self.bin_paths = multiline(cpp_info.bin_paths)
-        self.build_paths = multiline(cpp_info.build_paths)
+            return "\n\t\t\t".join('"%s"'
+                                   % p.replace('\\', '/').replace('$', '\\$').replace('"', '\\"')
+                                   for p in paths)
 
-        self.libs = " ".join(cpp_info.libs)
-        self.defines = "\n\t\t\t".join("-D%s" % d for d in cpp_info.defines)
-        self.compile_definitions = "\n\t\t\t".join(cpp_info.defines)
+        def join_flags(separator, values):
+            # Flags have to be escaped
+            return separator.join(v.replace('\\', '\\\\').replace('$', '\\$').replace('"', '\\"')
+                                  for v in values)
 
-        self.cppflags = " ".join(cpp_info.cppflags)
-        self.cflags = " ".join(cpp_info.cflags)
-        self.sharedlinkflags = " ".join(cpp_info.sharedlinkflags)
-        self.exelinkflags = " ".join(cpp_info.exelinkflags)
+        def join_defines(values, prefix=""):
+            # Defines have to be escaped, included spaces
+            return "\n\t\t\t".join('"%s%s"' % (prefix, v.replace('\\', '\\\\').replace('$', '\\$').
+                                   replace('"', '\\"'))
+                                   for v in values)
+
+        def join_paths_single_var(values):
+            """
+            semicolon-separated list of dirs:
+            e.g: set(LIBFOO_INCLUDE_DIR "/path/to/included/dir;/path/to/included/dir2")
+            """
+            return '"%s"' % ";".join(p.replace('\\', '/').replace('$', '\\$') for p in values)
+
+        self.include_paths = join_paths(cpp_info.include_paths)
+        self.include_path = join_paths_single_var(cpp_info.include_paths)
+        self.lib_paths = join_paths(cpp_info.lib_paths)
+        self.res_paths = join_paths(cpp_info.res_paths)
+        self.bin_paths = join_paths(cpp_info.bin_paths)
+        self.build_paths = join_paths(cpp_info.build_paths)
+        self.src_paths = join_paths(cpp_info.src_paths)
+        self.framework_paths = join_paths(cpp_info.framework_paths)
+        self.libs = join_flags(" ", cpp_info.libs)
+        self.system_libs = join_flags(" ", cpp_info.system_libs)
+        self.frameworks = join_flags(" ", cpp_info.frameworks)
+        self.defines = join_defines(cpp_info.defines, "-D")
+        self.compile_definitions = join_defines(cpp_info.defines)
+
+        self.cxxflags = join_flags(" ", cpp_info.cxxflags)
+        self.cflags = join_flags(" ", cpp_info.cflags)
+        self.sharedlinkflags = join_flags(" ", cpp_info.sharedlinkflags)
+        self.exelinkflags = join_flags(" ", cpp_info.exelinkflags)
 
         # For modern CMake targets we need to prepare a list to not
         # loose the elements in the list by replacing " " with ";". Example "-framework Foundation"
         # Issue: #1251
-        self.cppflags_list = ";".join(cpp_info.cppflags)
-        self.cflags_list = ";".join(cpp_info.cflags)
-        self.sharedlinkflags_list = ";".join(cpp_info.sharedlinkflags)
-        self.exelinkflags_list = ";".join(cpp_info.exelinkflags)
+        self.cxxflags_list = join_flags(";", cpp_info.cxxflags)
+        self.cflags_list = join_flags(";", cpp_info.cflags)
+        self.sharedlinkflags_list = join_flags(";", cpp_info.sharedlinkflags)
+        self.exelinkflags_list = join_flags(";", cpp_info.exelinkflags)
 
-        self.rootpath = '"%s"' % cpp_info.rootpath.replace("\\", "/")
+        self.rootpath = join_paths([cpp_info.rootpath])
+        self.build_modules_paths = join_paths([path for path in cpp_info.build_modules_paths if
+                                               path.endswith(".cmake")])
 
 
 class CMakeGenerator(Generator):
@@ -44,9 +75,11 @@ class CMakeGenerator(Generator):
     @property
     def content(self):
         sections = ["include(CMakeParseArguments)"]
+        sections.append(CMakeCommonMacros.apple_frameworks_macro)
 
         # Per requirement variables
-        for dep_name, dep_cpp_info in self.deps_build_info.dependencies:
+        for _, dep_cpp_info in self.deps_build_info.dependencies:
+            dep_name = dep_cpp_info.get_name("cmake")
             deps = DepsCppCmake(dep_cpp_info)
             dep_flags = cmake_dependency_vars(dep_name, deps=deps)
             sections.append(dep_flags)
@@ -73,7 +106,7 @@ class CMakeGenerator(Generator):
             sections.append(dep_flags)
 
         # TARGETS
-        sections.extend(generate_targets_section(self.deps_build_info.dependencies))
+        sections.extend(generate_targets_section(self.deps_build_info.dependencies, "cmake"))
 
         # MACROS
         sections.append(cmake_macros)

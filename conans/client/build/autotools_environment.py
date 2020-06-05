@@ -1,40 +1,23 @@
 import copy
-import platform
 import os
+import platform
 
-from conans.client import join_arguments
-from conans.tools import environment_append, args_to_string, cpu_count, cross_building, detected_architecture
-
-sun_cc_libcxx_flags_dict = {"libCstd": "-library=Cstd",
-                            "libstdcxx": "-library=stdcxx4",
-                            "libstlport": "-library=stlport4",
-                            "libstdc++": "-library=stdcpp"}
-
-architecture_dict = {"x86_64": "-m64", "x86": "-m32"}
-
-
-def stdlib_flags(compiler, libcxx):
-    ret = []
-    if compiler and "clang" in compiler:
-        if libcxx == "libc++":
-            ret.append("-stdlib=libc++")
-        else:
-            ret.append("-stdlib=libstdc++")
-    elif compiler == "sun-cc":
-        flag = sun_cc_libcxx_flags_dict.get(libcxx, None)
-        if flag:
-            ret.append(flag)
-    return ret
-
-
-def stdlib_defines(compiler, libcxx):
-    ret = []
-    if compiler == "gcc" or compiler == "clang":  # Maybe clang is using the standard library from g++
-        if libcxx == "libstdc++":
-            ret.append("_GLIBCXX_USE_CXX11_ABI=0")
-        elif str(libcxx) == "libstdc++11":
-            ret.append("_GLIBCXX_USE_CXX11_ABI=1")
-    return ret
+from conans.client.build import join_arguments
+from conans.client.build.compiler_flags import (architecture_flag, build_type_define,
+                                                build_type_flags, format_defines,
+                                                format_include_paths, format_libraries,
+                                                format_library_paths, libcxx_define, libcxx_flag,
+                                                pic_flag, rpath_flags, sysroot_flag,
+                                                format_frameworks, format_framework_paths)
+from conans.client.build.cppstd_flags import cppstd_from_settings, \
+    cppstd_flag_new as cppstd_flag
+from conans.client.tools.env import environment_append
+from conans.client.tools.oss import OSInfo, args_to_string, cpu_count, cross_building, \
+    detected_architecture, detected_os, get_gnu_triplet, get_target_os_arch, get_build_os_arch
+from conans.client.tools.win import unix_path
+from conans.errors import ConanException
+from conans.model.build_info import DEFAULT_BIN, DEFAULT_INCLUDE, DEFAULT_LIB, DEFAULT_SHARE
+from conans.util.files import get_abs_path
 
 
 class AutoToolsBuildEnvironment(object):
@@ -45,17 +28,29 @@ class AutoToolsBuildEnvironment(object):
     - LDFLAGS (-L, others like -m64 -m32) linker
     """
 
-    def __init__(self, conanfile):
+    def __init__(self, conanfile, win_bash=False, include_rpath_flags=False):
+        """
+        FIXME: include_rpath_flags CONAN 2.0 to default True? Could break many packages in center
+        """
         self._conanfile = conanfile
+        self._win_bash = win_bash
+        self._include_rpath_flags = include_rpath_flags
+        self.subsystem = OSInfo().detect_windows_subsystem() if self._win_bash else None
         self._deps_cpp_info = conanfile.deps_cpp_info
+        self._os = conanfile.settings.get_safe("os")
         self._arch = conanfile.settings.get_safe("arch")
+        self._os_target, self._arch_target = get_target_os_arch(conanfile)
         self._build_type = conanfile.settings.get_safe("build_type")
         self._compiler = conanfile.settings.get_safe("compiler")
+        self._compiler_version = conanfile.settings.get_safe("compiler.version")
+        self._compiler_runtime = conanfile.settings.get_safe("compiler.runtime")
         self._libcxx = conanfile.settings.get_safe("compiler.libcxx")
+        self._cppstd = cppstd_from_settings(conanfile.settings)
 
         # Set the generic objects before mapping to env vars to let the user
         # alter some value
         self.libs = copy.copy(self._deps_cpp_info.libs)
+        self.libs.extend(copy.copy(self._deps_cpp_info.system_libs))
         self.include_paths = copy.copy(self._deps_cpp_info.include_paths)
         self.library_paths = copy.copy(self._deps_cpp_info.lib_paths)
 
@@ -64,139 +59,232 @@ class AutoToolsBuildEnvironment(object):
         self.flags = self._configure_flags()
         # Only c++ flags [-stdlib, -library], will go to CXXFLAGS
         self.cxx_flags = self._configure_cxx_flags()
+        # cpp standard
+        self.cppstd_flag = cppstd_flag(conanfile.settings)
         # Not -L flags, ["-m64" "-m32"]
         self.link_flags = self._configure_link_flags()  # TEST!
-        # Not declared by default
-        self.fpic = None
+        # Precalculate -fPIC
+        self.fpic = self._configure_fpic()
 
-    def _get_host_build_target_flags(self, arch_detected, os_detected):
+        # Precalculate build, host, target triplets
+        self.build, self.host, self.target = self._get_host_build_target_flags()
+
+    def _configure_fpic(self):
+        if not str(self._os).startswith("Windows"):
+            fpic = self._conanfile.options.get_safe("fPIC")
+            if fpic is not None:
+                shared = self._conanfile.options.get_safe("shared")
+                return True if (fpic or shared) else None
+
+    def _get_host_build_target_flags(self):
         """Based on google search for build/host triplets, it could need a lot
         and complex verification"""
-        if not cross_building(self._conanfile.settings, os_detected, arch_detected):
-            return False, False, False
 
-        arch_setting = self._conanfile.settings.get_safe("arch")
-        os_setting = self._conanfile.settings.get_safe("os")
+        if self._os_target and self._arch_target:
+            try:
+                target = get_gnu_triplet(self._os_target, self._arch_target, self._compiler)
+            except ConanException as exc:
+                self._conanfile.output.warn(str(exc))
+                target = None
+        else:
+            target = None
 
-        if os_detected == "Windows" and os_setting != "Windows":
-            # Don't know what to do with these, even exists? its only for configure
-            return None, None, None
+        if hasattr(self._conanfile, 'settings_build'):
+            os_build, arch_build = get_build_os_arch(self._conanfile)
+        else:
+            # FIXME: Why not use 'os_build' and 'arch_build' from conanfile.settings?
+            os_build = detected_os() or platform.system()
+            arch_build = detected_architecture() or platform.machine()
 
-        # Building FOR windows
-        if os_setting == "Windows":
-            build = "i686-w64-mingw32" if arch_detected == "x86" else "x86_64-w64-mingw32"
-            host = "i686-w64-mingw32" if arch_setting == "x86" else "x86_64-w64-mingw32"
-        else:  # Building for Linux or Android
-            build = "%s-%s" % (arch_detected, {"Linux": "linux-gnu",
-                                               "Darwin": "apple-darwin"}.get(os_detected,
-                                                                            os_detected.lower()))
-            if arch_setting == "x86":
-                host_arch = "i686"
-            elif arch_setting == "armv8":
-                host_arch = "aarch64"
-            else:
-                host_arch = "arm" if "arm" in arch_setting else arch_setting
+        if os_build is None or arch_build is None or self._arch is None or self._os is None:
+            return False, False, target
 
-            host = "%s%s" % (host_arch, {"Linux": "-linux-gnueabi",
-                                         "Android": "-linux-android",
-                                         "Macos": "-apple-darwin",
-                                         "iOS": "-apple-darwin",
-                                         "watchOS": "-apple-darwin",
-                                         "tvOS": "-apple-darwin"}.get(os_setting, ""))
-            if arch_setting == "armv7hf" and os_setting == "Linux":
-                host += "hf"
-            elif "arm" in arch_setting and arch_setting != "armv8" and os_setting == "Android":
-                host += "eabi"
+        if not cross_building(self._conanfile, os_build, arch_build):
+            return False, False, target
 
-        return build, host, None
+        try:
+            build = get_gnu_triplet(os_build, arch_build, self._compiler)
+        except ConanException as exc:
+            self._conanfile.output.warn(str(exc))
+            build = None
+        try:
+            host = get_gnu_triplet(self._os, self._arch, self._compiler)
+        except ConanException as exc:
+            self._conanfile.output.warn(str(exc))
+            host = None
+        return build, host, target
 
     def configure(self, configure_dir=None, args=None, build=None, host=None, target=None,
-                  pkg_config_paths=None):
+                  pkg_config_paths=None, vars=None, use_default_install_dirs=True):
         """
         :param pkg_config_paths: Optional paths to locate the *.pc files
         :param configure_dir: Absolute or relative path to the configure script
         :param args: Optional arguments to pass to configure.
         :param build: In which system the program will be built. "False" skips the --build flag
         :param host: In which system the generated program will run.  "False" skips the --host flag
-        :param target: This option is only used to build a cross-compiling toolchain.  "False" skips the --target flag
-                       When the tool chain generates executable program, in which target system the program will run.
-        :return: None
+        :param target: This option is only used to build a cross-compiling toolchain.
+                       "False" skips the --target flag
+                       When the tool chain generates executable program, in which target system
+                       the program will run.
 
         http://jingfenghanmax.blogspot.com.es/2010/09/configure-with-host-target-and-build.html
         https://gcc.gnu.org/onlinedocs/gccint/Configure-Terms.html
+        :param use_default_install_dirs: Use or not the defaulted installation dirs
 
         """
+        if not self._conanfile.should_configure:
+            return
         if configure_dir:
             configure_dir = configure_dir.rstrip("/")
         else:
             configure_dir = "."
-        auto_build, auto_host, auto_target = None, None, None
-        if build is None or host is None or target is None:
-            auto_build, auto_host, auto_target = self._get_host_build_target_flags(detected_architecture(),
-                                                                                   platform.system())
 
         triplet_args = []
 
         if build is not False:  # Skipped by user
-            if build or auto_build:  # User specified value or automatic
-                triplet_args.append("--build=%s" % (build or auto_build))
+            if build or self.build:  # User specified value or automatic
+                triplet_args.append("--build=%s" % (build or self.build))
 
         if host is not False:   # Skipped by user
-            if host or auto_host:  # User specified value or automatic
-                triplet_args.append("--host=%s" % (host or auto_host))
+            if host or self.host:  # User specified value or automatic
+                triplet_args.append("--host=%s" % (host or self.host))
 
         if target is not False:  # Skipped by user
-            if target or auto_target:  # User specified value or automatic
-                triplet_args.append("--target=%s" % (target or auto_target))
+            if target or self.target:  # User specified value or automatic
+                triplet_args.append("--target=%s" % (target or self.target))
 
         if pkg_config_paths:
-            pkg_env = {"PKG_CONFIG_PATH": os.pathsep.join(pkg_config_paths)}
+            pkg_env = {"PKG_CONFIG_PATH":
+                       [os.pathsep.join(get_abs_path(f, self._conanfile.install_folder)
+                                        for f in pkg_config_paths)]}
         else:
             # If we are using pkg_config generator automate the pcs location, otherwise it could
             # read wrong files
-            pkg_env = {"PKG_CONFIG_PATH": self._conanfile.build_folder} \
-                if "pkg_config" in self._conanfile.generators else {}
+            pkg_env = {"PKG_CONFIG_PATH": [self._conanfile.install_folder]} \
+                if "pkg_config" in self._conanfile.generators else None
+
+        configure_dir = self._adjust_path(configure_dir)
+
+        if self._conanfile.package_folder is not None:
+            if not args:
+                args = ["--prefix=%s" % self._conanfile.package_folder.replace("\\", "/")]
+            elif not self._is_flag_in_args("prefix", args):
+                args.append("--prefix=%s" % self._conanfile.package_folder.replace("\\", "/"))
+
+            all_flags = ["bindir", "sbindir", "libexecdir", "libdir", "includedir", "oldincludedir",
+                         "datarootdir"]
+            help_output = self._configure_help_output(configure_dir)
+            available_flags = [flag for flag in all_flags if "--%s" % flag in help_output]
+
+            if use_default_install_dirs:
+                for varname in ["bindir", "sbindir", "libexecdir"]:
+                    if self._valid_configure_flag(varname, args, available_flags):
+                        args.append("--%s=${prefix}/%s" % (varname, DEFAULT_BIN))
+                if self._valid_configure_flag("libdir", args, available_flags):
+                    args.append("--libdir=${prefix}/%s" % DEFAULT_LIB)
+                for varname in ["includedir", "oldincludedir"]:
+                    if self._valid_configure_flag(varname, args, available_flags):
+                        args.append("--%s=${prefix}/%s" % (varname, DEFAULT_INCLUDE))
+                if self._valid_configure_flag("datarootdir", args, available_flags):
+                    args.append("--datarootdir=${prefix}/%s" % DEFAULT_SHARE)
 
         with environment_append(pkg_env):
-            with environment_append(self.vars):
-                self._conanfile.run("%s/configure %s %s"
-                                    % (configure_dir, args_to_string(args), " ".join(triplet_args)))
+            with environment_append(vars or self.vars):
+                command = '%s/configure %s %s' % (configure_dir, args_to_string(args),
+                                                  " ".join(triplet_args))
+                self._conanfile.output.info("Calling:\n > %s" % command)
+                self._conanfile.run(command, win_bash=self._win_bash, subsystem=self.subsystem)
 
-    def make(self, args="", make_program=None):
+    def _configure_help_output(self, configure_path):
+        from six import StringIO  # Python 2 and 3 compatible
+        mybuf = StringIO()
+        try:
+            self._conanfile.run("%s/configure --help" % configure_path, win_bash=self._win_bash, output=mybuf)
+        except ConanException as e:
+            self._conanfile.output.warn("Error running `configure --help`: %s" % e)
+            return ""
+        return mybuf.getvalue()
+
+    def _adjust_path(self, path):
+        if self._win_bash:
+            path = unix_path(path, path_flavor=self.subsystem)
+        return '"%s"' % path if " " in path else path
+
+    @staticmethod
+    def _valid_configure_flag(varname, args, available_flags):
+        return not AutoToolsBuildEnvironment._is_flag_in_args(varname, args) and \
+               varname in available_flags
+
+    @staticmethod
+    def _is_flag_in_args(varname, args):
+        flag = "--%s=" % varname
+        return any([flag in arg for arg in args])
+
+    def make(self, args="", make_program=None, target=None, vars=None):
+        if not self._conanfile.should_build:
+            return
         make_program = os.getenv("CONAN_MAKE_PROGRAM") or make_program or "make"
-        with environment_append(self.vars):
+        with environment_append(vars or self.vars):
             str_args = args_to_string(args)
-            cpu_count_option = ("-j%s" % cpu_count()) if "-j" not in str_args else None
-            self._conanfile.run("%s" % join_arguments([make_program, str_args, cpu_count_option]))
+            cpu_count_option = (("-j%s" % cpu_count(output=self._conanfile.output))
+                                if "-j" not in str_args else None)
+            self._conanfile.run("%s" % join_arguments([make_program, target, str_args,
+                                                       cpu_count_option]),
+                                win_bash=self._win_bash, subsystem=self.subsystem)
 
-    @property
-    def _sysroot_flag(self):
-        return "--sysroot=%s" % self._deps_cpp_info.sysroot if self._deps_cpp_info.sysroot else None
+    def install(self, args="", make_program=None, vars=None):
+        if not self._conanfile.should_install:
+            return
+        self.make(args=args, make_program=make_program, target="install", vars=vars)
 
     def _configure_link_flags(self):
         """Not the -L"""
         ret = copy.copy(self._deps_cpp_info.sharedlinkflags)
         ret.extend(self._deps_cpp_info.exelinkflags)
-        ret.append(self._architecture_flag)
-        if self._sysroot_flag:
-            ret.append(self._sysroot_flag)
+        ret.extend(format_frameworks(self._deps_cpp_info.frameworks, compiler=self._compiler))
+        ret.extend(format_framework_paths(self._deps_cpp_info.framework_paths, compiler=self._compiler))
+        arch_flag = architecture_flag(compiler=self._compiler, os=self._os, arch=self._arch)
+        if arch_flag:
+            ret.append(arch_flag)
+
+        sysf = sysroot_flag(self._deps_cpp_info.sysroot, win_bash=self._win_bash,
+                            subsystem=self.subsystem,
+                            compiler=self._compiler)
+        if sysf:
+            ret.append(sysf)
+
+        if self._include_rpath_flags:
+            os_build, _ = get_build_os_arch(self._conanfile)
+            if not hasattr(self._conanfile, 'settings_build'):
+                os_build = os_build or self._os
+            ret.extend(rpath_flags(os_build, self._compiler, self._deps_cpp_info.lib_paths))
+
         return ret
 
     def _configure_flags(self):
         ret = copy.copy(self._deps_cpp_info.cflags)
-        ret.append(self._architecture_flag)
-        if self._build_type == "Debug":
-            ret.append("-g")  # default debug information
-        elif self._build_type == "Release" and self._compiler == "gcc":
-            # Remove all symbol table and relocation information from the executable.
-            ret.append("-s")
-        if self._sysroot_flag:
-            ret.append(self._sysroot_flag)
+        arch_flag = architecture_flag(compiler=self._compiler, os=self._os, arch=self._arch)
+        if arch_flag:
+            ret.append(arch_flag)
+        btfs = build_type_flags(compiler=self._compiler, build_type=self._build_type,
+                                vs_toolset=self._conanfile.settings.get_safe("compiler.toolset"))
+        if btfs:
+            ret.extend(btfs)
+        srf = sysroot_flag(self._deps_cpp_info.sysroot, win_bash=self._win_bash,
+                           subsystem=self.subsystem,
+                           compiler=self._compiler)
+        if srf:
+            ret.append(srf)
+        if self._compiler_runtime:
+            ret.append("-%s" % self._compiler_runtime)
+
         return ret
 
     def _configure_cxx_flags(self):
-        ret = copy.copy(self._deps_cpp_info.cppflags)
-        ret.extend(stdlib_flags(self._compiler, self._libcxx))
+        ret = copy.copy(self._deps_cpp_info.cxxflags)
+        cxxf = libcxx_flag(compiler=self._compiler, libcxx=self._libcxx)
+        if cxxf:
+            ret.append(cxxf)
         return ret
 
     def _configure_defines(self):
@@ -204,16 +292,15 @@ class AutoToolsBuildEnvironment(object):
         ret = copy.copy(self._deps_cpp_info.defines)
 
         # Debug definition for GCC
-        if self._build_type == "Release" and self._compiler == "gcc":
-            ret.append("NDEBUG")
+        btf = build_type_define(build_type=self._build_type)
+        if btf:
+            ret.append(btf)
 
         # CXX11 ABI
-        ret.extend(stdlib_defines(self._compiler, self._libcxx))
+        abif = libcxx_define(compiler=self._compiler, libcxx=self._libcxx)
+        if abif:
+            ret.append(abif)
         return ret
-
-    @property
-    def _architecture_flag(self):
-        return architecture_dict.get(self._arch, "")
 
     def _get_vars(self):
         def append(*args):
@@ -226,18 +313,20 @@ class AutoToolsBuildEnvironment(object):
                         ret.append(arg)
             return ret
 
-        lib_paths = ['-L%s' % x.replace("\\", "/") for x in self.library_paths]
-        include_paths = ['-I%s' % x.replace("\\", "/") for x in self.include_paths]
+        lib_paths = format_library_paths(self.library_paths, win_bash=self._win_bash,
+                                         subsystem=self.subsystem, compiler=self._compiler)
+        include_paths = format_include_paths(self.include_paths, win_bash=self._win_bash,
+                                             subsystem=self.subsystem, compiler=self._compiler)
 
         ld_flags = append(self.link_flags, lib_paths)
-        cpp_flags = append(include_paths, ["-D%s" % x for x in self.defines])
-        libs = ['-l%s' % lib for lib in self.libs]
+        cpp_flags = append(include_paths, format_defines(self.defines))
+        libs = format_libraries(self.libs, compiler=self._compiler)
 
         tmp_compilation_flags = copy.copy(self.flags)
         if self.fpic:
-            tmp_compilation_flags.append("-fPIC")
+            tmp_compilation_flags.append(pic_flag(self._compiler))
 
-        cxx_flags = append(tmp_compilation_flags, self.cxx_flags)
+        cxx_flags = append(tmp_compilation_flags, self.cxx_flags, self.cppstd_flag)
         c_flags = tmp_compilation_flags
 
         return ld_flags, cpp_flags, libs, cxx_flags, c_flags
@@ -266,13 +355,13 @@ class AutoToolsBuildEnvironment(object):
                "CXXFLAGS": cxx_flags,
                "CFLAGS": c_flags,
                "LDFLAGS": ld_flags,
-               "LIBS": libs,
+               "LIBS": libs
                }
+
         return ret
 
     @property
     def vars(self):
-
         ld_flags, cpp_flags, libs, cxx_flags, c_flags = self._get_vars()
 
         cpp_flags = " ".join(cpp_flags) + _environ_value_prefix("CPPFLAGS")
@@ -285,7 +374,7 @@ class AutoToolsBuildEnvironment(object):
                "CXXFLAGS": cxx_flags.strip(),
                "CFLAGS": cflags.strip(),
                "LDFLAGS": ldflags.strip(),
-               "LIBS": libs.strip(),
+               "LIBS": libs.strip()
                }
 
         return ret

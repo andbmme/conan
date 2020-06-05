@@ -3,25 +3,31 @@
 
 import subprocess
 
+from conans.errors import ConanException
+from conans.util.runners import check_output_runner
+
 
 class PkgConfig(object):
     @staticmethod
     def _cmd_output(command):
-        return subprocess.check_output(command).decode().strip()
+        return check_output_runner(command).strip()
 
-    def __init__(self, library, pkg_config_executable='pkg-config', static=False, msvc_syntax=False, variables=None):
+    def __init__(self, library, pkg_config_executable='pkg-config', static=False, msvc_syntax=False, variables=None,
+                 print_errors=True):
         """
         :param library: library (package) name, such as libastral
         :param pkg_config_executable: specify custom pkg-config executable (e.g. for cross-compilation)
         :param static: output libraries suitable for static linking (adds --static to pkg-config command line)
         :param msvc_syntax: MSVC compatibility (adds --msvc-syntax to pkg-config command line)
         :param variables: dictionary of pkg-config variables (passed as --define-variable=VARIABLENAME=VARIABLEVALUE)
+        :param print_errors: output error messages (adds --print-errors)
         """
         self.library = library
         self.pkg_config_executable = pkg_config_executable
         self.static = static
         self.msvc_syntax = msvc_syntax
         self.define_variables = variables
+        self.print_errors = print_errors
 
         self._variables = dict()
         self.info = dict()
@@ -32,13 +38,18 @@ class PkgConfig(object):
             command.append('--static')
         if self.msvc_syntax:
             command.append('--msvc-syntax')
+        if self.print_errors:
+            command.append('--print-errors')
         if self.define_variables:
             for name, value in self.define_variables.items():
                 command.append('--define-variable=%s=%s' % (name, value))
-        return self._cmd_output(command)
+        try:
+            return self._cmd_output(command)
+        except subprocess.CalledProcessError as e:
+            raise ConanException('pkg-config command %s failed with error: %s' % (command, e))
 
     def _get_option(self, option):
-        if not option in self.info:
+        if option not in self.info:
             self.info[option] = self._parse_output(option).split()
         return self.info[option]
 

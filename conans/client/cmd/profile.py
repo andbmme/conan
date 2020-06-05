@@ -1,12 +1,12 @@
 import os
 
+from conans.client.conf.detect import detect_defaults_settings
+from conans.client.profile_loader import get_profile_path, read_profile
 from conans.errors import ConanException
-from conans.client.profile_loader import read_profile, get_profile_path
-from conans.util.files import save
-from conans.model.env_info import EnvValues
 from conans.model.options import OptionsValues
 from conans.model.profile import Profile
-from conans.client.conf.detect import detect_defaults_settings
+from conans.unicode import get_cwd
+from conans.util.files import save
 
 
 def _get_profile_keys(key):
@@ -21,55 +21,64 @@ def _get_profile_keys(key):
 
 
 def cmd_profile_list(cache_profiles_path, output):
-    folder = cache_profiles_path
-    if os.path.exists(folder):
-        return [name for name in os.listdir(folder)
-                if not os.path.isdir(os.path.join(folder, name))]
-    else:
+    profiles = []
+    if os.path.exists(cache_profiles_path):
+        for current_directory, _, files in os.walk(cache_profiles_path, followlinks=True):
+            for filename in files:
+                rel_path = os.path.relpath(os.path.join(current_directory, filename),
+                                           cache_profiles_path)
+                profiles.append(rel_path)
+
+    if not profiles:
         output.info("No profiles defined")
-        return []
+    profiles.sort()
+    return profiles
 
 
-def cmd_profile_create(profile_name, cache_profiles_path, output, detect=False):
-    profile_path = get_profile_path(profile_name, cache_profiles_path, os.getcwd(),
+def cmd_profile_create(profile_name, cache_profiles_path, output, detect=False, force=False):
+    profile_path = get_profile_path(profile_name, cache_profiles_path, get_cwd(),
                                     exists=False)
-    if os.path.exists(profile_path):
+    if not force and os.path.exists(profile_path):
         raise ConanException("Profile already exists")
 
     profile = Profile()
     if detect:
-        settings = detect_defaults_settings(output)
+        settings = detect_defaults_settings(output, profile_path)
         for name, value in settings:
             profile.settings[name] = value
 
     contents = profile.dumps()
     save(profile_path, contents)
-    output.info("Empty profile created: %s" % profile_path)
+
+    if detect:
+        output.info("Profile created with detected settings: %s" % profile_path)
+    else:
+        output.info("Empty profile created: %s" % profile_path)
     return profile_path
 
 
 def cmd_profile_update(profile_name, key, value, cache_profiles_path):
     first_key, rest_key = _get_profile_keys(key)
 
-    profile, _ = read_profile(profile_name, os.getcwd(), cache_profiles_path)
+    profile, _ = read_profile(profile_name, get_cwd(), cache_profiles_path)
     if first_key == "settings":
         profile.settings[rest_key] = value
     elif first_key == "options":
         tmp = OptionsValues([(rest_key, value)])
         profile.options.update(tmp)
     elif first_key == "env":
-        profile.env_values.update(EnvValues.loads("%s=%s" % (rest_key, value)))
+        profile.env_values.update_replace(rest_key, value)
     elif first_key == "build_requires":
         raise ConanException("Edit the profile manually to change the build_requires")
 
     contents = profile.dumps()
-    profile_path = get_profile_path(profile_name, cache_profiles_path, os.getcwd())
+    profile_path = get_profile_path(profile_name, cache_profiles_path, get_cwd())
     save(profile_path, contents)
 
 
 def cmd_profile_get(profile_name, key, cache_profiles_path):
     first_key, rest_key = _get_profile_keys(key)
-    profile, _ = read_profile(profile_name, os.getcwd(), cache_profiles_path)
+    profile, _ = read_profile(profile_name, get_cwd(), cache_profiles_path)
     try:
         if first_key == "settings":
             return profile.settings[rest_key]
@@ -89,7 +98,7 @@ def cmd_profile_get(profile_name, key, cache_profiles_path):
 
 def cmd_profile_delete_key(profile_name, key, cache_profiles_path):
     first_key, rest_key = _get_profile_keys(key)
-    profile, _ = read_profile(profile_name, os.getcwd(), cache_profiles_path)
+    profile, _ = read_profile(profile_name, get_cwd(), cache_profiles_path)
 
     try:
         package, name = rest_key.split(":")
@@ -110,5 +119,5 @@ def cmd_profile_delete_key(profile_name, key, cache_profiles_path):
         raise ConanException("Profile key '%s' doesn't exist" % key)
 
     contents = profile.dumps()
-    profile_path = get_profile_path(profile_name, cache_profiles_path, os.getcwd())
+    profile_path = get_profile_path(profile_name, cache_profiles_path, get_cwd())
     save(profile_path, contents)

@@ -1,13 +1,15 @@
 from abc import ABCMeta, abstractproperty
 
+import six
 
+
+@six.add_metaclass(ABCMeta)
 class Generator(object):
-    __metaclass__ = ABCMeta
 
     def __init__(self, conanfile):
         self.conanfile = conanfile
+        self.normalize = True
         self._deps_build_info = conanfile.deps_cpp_info
-        self._build_info = conanfile.cpp_info
         self._deps_env_info = conanfile.deps_env_info
         self._env_info = conanfile.env_info
         self._deps_user_info = conanfile.deps_user_info
@@ -15,10 +17,6 @@ class Generator(object):
     @property
     def deps_build_info(self):
         return self._deps_build_info
-
-    @property
-    def build_info(self):
-        return self._build_info
 
     @property
     def deps_env_info(self):

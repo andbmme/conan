@@ -2,9 +2,8 @@ from conans.paths import CONANFILE
 
 
 conanfile_template = r"""
-from conans import ConanFile, tools
-import sys
-import os
+from conans import ConanFile
+
 
 class {name}Conan(ConanFile):
     name = "{name}"
@@ -15,8 +14,7 @@ class {name}Conan(ConanFile):
     build_policy = "missing"
 
     def build(self):
-        with tools.pythonpath(self):
-            pass
+        pass
 {build}
 
     def package(self):
@@ -49,7 +47,7 @@ if __name__ == "__main__":
 '''
 
 
-def py_hello_source_files(number=0, deps=None):
+def _py_hello_source_files(number=0, deps=None):
     assert deps is None or isinstance(deps, list)
     deps = deps or []
     ret = {}
@@ -70,15 +68,15 @@ def py_hello_source_files(number=0, deps=None):
 
 def py_hello_conan_files(name, version, deps=None):
     assert deps is None or isinstance(deps, list)
-    base_files = py_hello_source_files(name, deps)
+    base_files = _py_hello_source_files(name, deps)
     requires = []
     for d in deps or []:
         requires.append(d)
     requires = ", ".join('"%s"' % r for r in requires)
     deps_names = [str(n).split("/", 1)[0] for n in deps or []]
     if deps:
-        build = "\n".join(["            from hello%s import hello as h%s\n"
-                           "            h%s.build_helper(self)" % (i, i, i) for i in deps_names])
+        build = "\n".join(["        from hello%s import hello as h%s\n"
+                           "        h%s.build_helper(self)" % (i, i, i) for i in deps_names])
     else:
         build = ""
     conanfile = conanfile_template.format(name=name, version=version, requires=requires,

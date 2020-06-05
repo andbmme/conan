@@ -1,20 +1,25 @@
 import os
 from collections import OrderedDict, defaultdict
 
-from conans.errors import ConanException
+from conans.errors import ConanException, ConanV2Exception
 from conans.model.env_info import EnvValues, unquote
-from conans.model.info import ConanInfo
 from conans.model.options import OptionsValues
 from conans.model.profile import Profile
 from conans.model.ref import ConanFileReference
-from conans.paths import CONANINFO
+from conans.util.conan_v2_mode import conan_v2_behavior
 from conans.util.config_parser import ConfigParser
 from conans.util.files import load, mkdir
+from conans.util.log import logger
 
 
 class ProfileParser(object):
 
     def __init__(self, text):
+        """ divides the text in 3 items:
+        - self.vars: Dictionary with variable=value declarations
+        - self.includes: List of other profiles to include
+        - self.profile_text: the remaining, containing settings, options, env, etc
+        """
         self.vars = OrderedDict()  # Order matters, if user declares F=1 and then FOO=12,
         # and in profile MYVAR=$FOO, it will
         self.includes = []
@@ -40,45 +45,36 @@ class ProfileParser(object):
                 value = unquote(value)
                 self.vars[name] = value
 
-    def apply_vars(self, repl_vars):
-        self.vars = self._apply_in_vars(repl_vars)
-        self.includes = self._apply_in_includes(repl_vars)
-        self.profile_text = self._apply_in_profile_text(repl_vars)
+    def apply_vars(self):
+        self._apply_in_vars()
+        self._apply_in_profile_text()
 
-    def _apply_in_vars(self, repl_vars):
+    def get_includes(self):
+        # Replace over includes seems insane and it is not documented. I am leaving it now
+        # afraid of breaking, but should be removed Conan 2.0
+        for include in self.includes:
+            for repl_key, repl_value in self.vars.items():
+                include = include.replace("$%s" % repl_key, repl_value)
+            yield include
+
+    def update_vars(self, included_vars):
+        """ update the variables dict with new ones from included profiles,
+        but keeping (higher priority) existing values"""
+        included_vars.update(self.vars)
+        self.vars = included_vars
+
+    def _apply_in_vars(self):
         tmp_vars = OrderedDict()
         for key, value in self.vars.items():
-            for repl_key, repl_value in repl_vars.items():
+            for repl_key, repl_value in self.vars.items():
                 key = key.replace("$%s" % repl_key, repl_value)
                 value = value.replace("$%s" % repl_key, repl_value)
             tmp_vars[key] = value
-        return tmp_vars
+        self.vars = tmp_vars
 
-    def _apply_in_includes(self, repl_vars):
-        tmp_includes = []
-        for include in self.includes:
-            for repl_key, repl_value in repl_vars.items():
-                include = include.replace("$%s" % repl_key, repl_value)
-            tmp_includes.append(include)
-        return tmp_includes
-
-    def _apply_in_profile_text(self, repl_vars):
-        tmp_text = self.profile_text
-        for repl_key, repl_value in repl_vars.items():
-            tmp_text = tmp_text.replace("$%s" % repl_key, repl_value)
-        return tmp_text
-
-
-def read_conaninfo_profile(current_path):
-    conan_info_path = os.path.join(current_path, CONANINFO)
-    if not os.path.exists(conan_info_path):
-        return None
-    existing_info = ConanInfo.load_file(conan_info_path)
-    profile = Profile()
-    profile.settings = OrderedDict(existing_info.full_settings.as_list())
-    profile.options = existing_info.full_options
-    profile.env_values = existing_info.env_values
-    return profile
+    def _apply_in_profile_text(self):
+        for k, v in self.vars.items():
+            self.profile_text = self.profile_text.replace("$%s" % k, v)
 
 
 def get_profile_path(profile_name, default_folder, cwd, exists=True):
@@ -114,10 +110,13 @@ def read_profile(profile_name, cwd, default_folder):
         return None, None
 
     profile_path = get_profile_path(profile_name, default_folder, cwd)
+    logger.debug("PROFILE LOAD: %s" % profile_path)
     text = load(profile_path)
 
     try:
         return _load_profile(text, profile_path, default_folder)
+    except ConanV2Exception:
+        raise
     except ConanException as exc:
         raise ConanException("Error reading '%s' profile: %s" % (profile_name, exc))
 
@@ -126,40 +125,35 @@ def _load_profile(text, profile_path, default_folder):
     """ Parse and return a Profile object from a text config like representation.
         cwd is needed to be able to load the includes
     """
-
     try:
         inherited_profile = Profile()
         cwd = os.path.dirname(os.path.abspath(profile_path)) if profile_path else None
         profile_parser = ProfileParser(text)
-        inherited_vars = profile_parser.vars
         # Iterate the includes and call recursive to get the profile and variables
         # from parent profiles
-        for include in profile_parser.includes:
+        for include in profile_parser.get_includes():
             # Recursion !!
-            profile, declared_vars = read_profile(include, cwd, default_folder)
+            profile, included_vars = read_profile(include, cwd, default_folder)
             inherited_profile.update(profile)
-            inherited_vars.update(declared_vars)
+            profile_parser.update_vars(included_vars)
 
         # Apply the automatic PROFILE_DIR variable
         if cwd:
-            inherited_vars["PROFILE_DIR"] = os.path.abspath(cwd)
-            # Allows PYTHONPATH=$PROFILE_DIR/pythontools
+            profile_parser.vars["PROFILE_DIR"] = os.path.abspath(cwd).replace('\\', '/')
 
         # Replace the variables from parents in the current profile
-        profile_parser.apply_vars(inherited_vars)
+        profile_parser.apply_vars()
 
         # Current profile before update with parents (but parent variables already applied)
         doc = ConfigParser(profile_parser.profile_text,
-                           allowed_fields=["build_requires", "settings", "env",
-                                           "scopes", "options"])
+                           allowed_fields=["build_requires", "settings", "env", "scopes", "options"])
+        if 'scopes' in doc._sections:
+            conan_v2_behavior("Field 'scopes' in profile is deprecated")
 
         # Merge the inherited profile with the readed from current profile
         _apply_inner_profile(doc, inherited_profile)
 
-        # Return the intherited vars to apply them in the parent profile if exists
-        inherited_vars.update(profile_parser.vars)
-        return inherited_profile, inherited_vars
-
+        return inherited_profile, profile_parser.vars
     except ConanException:
         raise
     except Exception as exc:
@@ -173,8 +167,8 @@ def _load_single_build_require(profile, line):
         pattern, req_list = "*", line
     else:
         pattern, req_list = tokens
-    req_list = [ConanFileReference.loads(r.strip()) for r in req_list.split(",")]
-    profile.build_requires.setdefault(pattern, []).extend(req_list)
+    refs = [ConanFileReference.loads(reference.strip()) for reference in req_list.split(",")]
+    profile.build_requires.setdefault(pattern, []).extend(refs)
 
 
 def _apply_inner_profile(doc, base_profile):
@@ -217,24 +211,35 @@ def _apply_inner_profile(doc, base_profile):
     if doc.options:
         base_profile.options.update(OptionsValues.loads(doc.options))
 
-    base_profile.env_values.update(EnvValues.loads(doc.env))
+    # The env vars from the current profile (read in doc)
+    # are updated with the included profiles (base_profile)
+    # the current env values has priority
+    current_env_values = EnvValues.loads(doc.env)
+    current_env_values.update(base_profile.env_values)
+    base_profile.env_values = current_env_values
 
 
-def profile_from_args(profile, settings, options, env, cwd, client_cache):
+def profile_from_args(profiles, settings, options, env, cwd, cache):
     """ Return a Profile object, as the result of merging a potentially existing Profile
     file and the args command-line arguments
     """
-    if profile is None:
-        file_profile = client_cache.default_profile
+    default_profile = cache.default_profile  # Ensures a default profile creating
+
+    if profiles is None:
+        result = default_profile
     else:
-        file_profile, _ = read_profile(profile, cwd, client_cache.profiles_path)
+        result = Profile()
+        for p in profiles:
+            tmp, _ = read_profile(p, cwd, cache.profiles_path)
+            result.update(tmp)
+
     args_profile = _profile_parse_args(settings, options, env)
 
-    if file_profile:
-        file_profile.update(args_profile)
-        return file_profile
+    if result:
+        result.update(args_profile)
     else:
-        return args_profile
+        result = args_profile
+    return result
 
 
 def _profile_parse_args(settings, options, envs):

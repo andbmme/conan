@@ -1,173 +1,200 @@
+|Logo|
+
 Conan
 =====
 
-A distributed, open source, package manager.
+Decentralized, open-source (MIT), C/C++ package manager.
 
-+------------------------+-------------------------+----------------------+-----------------------+
-| **master (linux/osx)** | **develop (linux/osx)** | **master (windows)** | **develop** (windows) |
-+========================+=========================+======================+=======================+
-| |Build Status1|        | |Build Status2|         | |Build status3|      | |Build status4|       |
-+------------------------+-------------------------+----------------------+-----------------------+
-
-+------------------------+---------------------------+--------------------------------------------------+
-| **Coverage develop**   | **Coverage master**       | **Coverage graph**                               |
-+========================+===========================+==================================================+
-| |Develop coverage|     | |Master coverage|         |      |Coverage graph|                            |
-+------------------------+---------------------------+--------------------------------------------------+
+- Homepage: https://conan.io/
+- Github: https://github.com/conan-io/conan
+- Docs: https://docs.conan.io/en/latest/
+- Slack: https://cpplang-inviter.cppalliance.org/ (#conan channel)
+- Twitter: https://twitter.com/conan_io
 
 
+Conan is a package manager for C and C++ developers:
+
+- It is fully decentralized. Users can host their packages in their servers, privately. Integrates with Artifactory and Bintray.
+- Portable. Works across all platforms, including Linux, OSX, Windows (with native and first-class support, WSL, MinGW),
+  Solaris, FreeBSD, embedded and cross-compiling, docker, WSL
+- Manage binaries. It can create, upload and download binaries for any configuration and platform,
+  even cross-compiling, saving lots of time in development and continuous integration. The binary compatibility
+  can be configured and customized. Manage all your artifacts in the same way on all platforms.
+- Integrates with any build system, including any proprietary and custom one. Provides tested support for major build systems
+  (CMake, MSBuild, Makefiles, Meson, etc).
+- Extensible: Its python based recipes, together with extensions points allows for great power and flexibility.
+- Large and active community, especially in Github (https://github.com/conan-io/conan) and Slack (https://cpplang-inviter.cppalliance.org/ #conan channel).
+  This community also creates and maintains packages in ConanCenter and Bincrafters repositories in Bintray.
+- Stable. Used in production by many companies, since 1.0 there is a commitment not to break package recipes and documented behavior.
+
+
+
++------------------------+-------------------------+-------------------------+
+| **master**             | **develop**             |    **Code Climate**     |
++========================+=========================+=========================+
+| |Build Status Master|  | |Build Status Develop|  |   |Develop climate|     |
++------------------------+-------------------------+-------------------------+
 
 
 Setup
-======
+=====
 
-From binaries
--------------
+Please read https://docs.conan.io/en/latest/installation.html to know how to
+install and start using Conan. TL;DR:
 
-We have installers for `most platforms here <http://conan.io>`__ but you
-can run **conan** from sources if you want
+.. code-block::
 
-
-From pip
---------
-
-Conan is compatible with Python 2 and Python 3.
-
-- Install pip following `pip docs`_
-
-- Install conan:
-
-::
-
-    $ pip install conan
+   $ pip install conan
 
 
-From Homebrew (OSx)
--------------------
+Install a development version
+-----------------------------
 
-- Install Homebrew following `brew homepage`_.
+You can run **Conan** client and server in Windows, MacOS, and Linux.
 
-::
+- **Install pip following** `pip docs`_.
 
-    $ brew update
-    $ brew install conan
+- **Clone Conan repository:**
 
+  .. code-block:: bash
 
+      $ git clone https://github.com/conan-io/conan.git
 
-From source
------------
+- **Install in editable mode**
 
-You can run **conan** client and server in Windows, MacOS, and Linux.
+  .. code-block:: bash
 
-Install *python and pip*, search in google instructions for your operating system.
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+      $ cd conan && sudo pip install -e .
 
-Clone conan repository
-~~~~~~~~~~~~~~~~~~~~~~
+  If you are in Windows, using ``sudo`` is not required.
 
-::
+- **You are ready, try to run Conan:**
 
-    $ git clone https://github.com/conan-io/conan.git
+  .. code-block::
 
-Install python requirements
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    $ conan --help
 
-For running the client:
+    Consumer commands
+      install    Installs the requirements specified in a conanfile (.py or .txt).
+      config     Manages configuration. Edits the conan.conf or installs config files.
+      get        Gets a file or list a directory of a given reference or package.
+      info       Gets information about the dependency graph of a recipe.
+      search     Searches package recipes and binaries in the local cache or in a remote.
+    Creator commands
+      new        Creates a new package recipe template with a 'conanfile.py'.
+      create     Builds a binary package for a recipe (conanfile.py) located in the current dir.
+      upload     Uploads a recipe and binary packages to a remote.
+      export     Copies the recipe (conanfile.py & associated files) to your local cache.
+      export-pkg Exports a recipe & creates a package with given files calling 'package'.
+      test       Test a package, consuming it with a conanfile recipe with a test() method.
+    Package development commands
+      source     Calls your local conanfile.py 'source()' method.
+      build      Calls your local conanfile.py 'build()' method.
+      package    Calls your local conanfile.py 'package()' method.
+    Misc commands
+      profile    Lists profiles in the '.conan/profiles' folder, or shows profile details.
+      remote     Manages the remote list and the package recipes associated with a remote.
+      user       Authenticates against a remote with user/pass, caching the auth token.
+      imports    Calls your local conanfile.py or conanfile.txt 'imports' method.
+      copy       Copies conan recipes and packages to another user/channel.
+      remove     Removes packages or binaries matching pattern from local cache or remote.
+      alias      Creates and exports an 'alias recipe'.
+      download   Downloads recipe and binaries to the local cache, without using settings.
 
-::
+    Conan commands. Type "conan <command> -h" for help
 
-    $ sudo pip install -r conans/requirements.txt
+Contributing to the project
+===========================
 
-
-In OSX you should also install:
-
-::
-
-    $ sudo pip install -r conans/requirements_osx.txt
-
-Server:
-
-::
-
-    $ sudo apt-get install python-dev
-    $ sudo pip install -r conans/requirements_server.txt
-
-Development (for running the tests):
-
-::
-
-    $ sudo pip install -r conans/requirements_dev.txt
-
-
-If you are in Windows, using ``sudo`` is not required.
+Feedback and contribution are always welcome in this project.
+Please read our `contributing guide <https://github.com/conan-io/conan/blob/develop/.github/CONTRIBUTING.md>`_.
 
 Running the tests
-~~~~~~~~~~~~~~~~~~
+=================
 
-Make sure that the Python requirements for testing have been installed, as explained above.
+Using tox
+---------
 
-Before you can run the tests, you need to set a few environment
-variables first.
+.. code-block:: bash
 
-::
+    $ python -m tox
+
+It will install the needed requirements and launch `nose` skipping some heavy and slow tests.
+If you want to run the full test suite:
+
+.. code-block:: bash
+
+    $ python -m tox -e full
+
+Without tox
+-----------
+
+**Install python requirements**
+
+.. code-block:: bash
+
+    $ python -m pip install -r conans/requirements.txt
+    $ python -m pip install -r conans/requirements_server.txt
+    $ python -m pip install -r conans/requirements_dev.txt
+
+If you are not Windows and you are not using a python virtual environment, you will need to run these
+commands using `sudo`.
+
+Before you can run the tests, you need to set a few environment variables first.
+
+.. code-block:: bash
 
     $ export PYTHONPATH=$PYTHONPATH:$(pwd)
 
+On Windows it would be (while being in the Conan root directory):
 
-On Windows it would be (while being in the conan root directory):
-
-::
+.. code-block:: bash
 
     $ set PYTHONPATH=.
 
 Ensure that your ``cmake`` has version 2.8 or later. You can see the
 version with the following command:
 
-::
+.. code-block:: bash
 
     $ cmake --version
 
-The appropriate values of ``CONAN_COMPILER`` and
-``CONAN_COMPILER_VERSION`` depend on your operating system and your
-requirements.
+The appropriate values of ``CONAN_COMPILER`` and ``CONAN_COMPILER_VERSION`` depend on your
+operating system and your requirements.
 
 These should work for the GCC from ``build-essential`` on Ubuntu 14.04:
 
-::
+.. code-block:: bash
 
     $ export CONAN_COMPILER=gcc
     $ export CONAN_COMPILER_VERSION=4.8
 
 These should work for OS X:
 
-::
+.. code-block:: bash
 
     $ export CONAN_COMPILER=clang
     $ export CONAN_COMPILER_VERSION=3.5
 
-Finally, there are some tests that use conan to package Go-lang
-libraries, so you might **need to install go-lang** in your computer and
-add it to the path.
-
 You can run the actual tests like this:
 
-::
+.. code-block:: bash
 
-    $ nosetests .
+    $ python -m nose .
 
 
-There are a couple of test attributes defined, as ``slow``, or ``golang`` that you can use
+There are a couple of test attributes defined, as ``slow`` that you can use
 to filter the tests, and do not execute them:
 
-::
+.. code-block:: bash
 
-    $ nosetests . -a !golang
+    $ python -m nose . -a !slow
 
 A few minutes later it should print ``OK``:
 
-::
+.. code-block:: bash
 
-    ..................................................................................................................................................
+    ............................................................................................
     ----------------------------------------------------------------------
     Ran 146 tests in 50.993s
 
@@ -175,73 +202,28 @@ A few minutes later it should print ``OK``:
 
 To run specific tests, you can specify the test name too, something like:
 
-::
+.. code-block:: bash
 
-    $ nosetests conans.test.integration.flat_requirements_test --nocapture
-
+    $ python -m nose conans.test.command.config_install_test:ConfigInstallTest.install_file_test --nocapture
 
 The ``--nocapture`` argument can be useful to see some output that otherwise is captured by nosetests.
-
-
-Create a launcher
-~~~~~~~~~~~~~~~~~
-
-Conan entry point is "conans.conan.main" module. Fill the absolute path
-of the cloned repository folder:
-
-::
-
-    #!/usr/bin/env python
-    import sys
-    sys.path.append('/home/user/conan') # EDIT!!
-
-    from conans.conan import main
-    main(sys.argv[1:])
-
-If you are a Windows user, you can name this file "conan.py" and create
-a file "conan.bat" that calls the python module:
-
-::
-
-    CALL python C:/Users/user/conan.py %*
-
-Then add that 'conan' file to your PATH and you are ready:
-
-::
-
-    $ conan --help
-
-    Conan commands. Type $conan "command" -h for help
-      build      calls your project conanfile.py "build" method.
-      export     copies a conanfile.py and associated (export) files to your local store,
-      install    install in the local store the given requirements.
-      remove     Remove any folder from your local/remote store
-      search     show local/remote packages
-      test       build and run your package test. Must have conanfile.py with "test"
-      upload     uploads a conanfile or binary packages from the local store to any remote.
-      user       shows or change the current user 
 
 License
 -------
 
 `MIT LICENSE <./LICENSE.md>`__
 
-.. |Build Status1| image:: https://travis-ci.org/conan-io/conan.svg?branch=master
-   :target: https://travis-ci.org/conan-io/conan
-.. |Build Status2| image:: https://travis-ci.org/conan-io/conan.svg?branch=develop
-   :target: https://travis-ci.org/conan-io/conan
-.. |Build status3| image:: https://ci.appveyor.com/api/projects/status/dae0ple27akmpgj4/branch/master?svg=true
-   :target: https://ci.appveyor.com/project/ConanCIintegration/conan/branch/master
-.. |Build status4| image:: https://ci.appveyor.com/api/projects/status/dae0ple27akmpgj4/branch/develop?svg=true
-   :target: https://ci.appveyor.com/project/ConanCIintegration/conan/branch/develop
+.. |Build Status Master| image:: https://conan-ci.jfrog.info/buildStatus/icon?job=ConanTestSuite/master
+   :target: https://conan-ci.jfrog.info/job/ConanTestSuite/job/master
+
+.. |Build Status Develop| image:: https://conan-ci.jfrog.info/buildStatus/icon?job=ConanTestSuite/develop
+   :target: https://conan-ci.jfrog.info/job/ConanTestSuite/job/develop
+
+.. |Develop climate| image:: https://api.codeclimate.com/v1/badges/081b53e570d5220b34e4/maintainability.svg
+   :target: https://codeclimate.com/github/conan-io/conan/maintainability
+
+.. |Logo| image:: https://conan.io/img/jfrog_conan_logo.png
+
+
 .. _`pip docs`: https://pip.pypa.io/en/stable/installing/
-.. _`brew homepage`: http://brew.sh/
-.. |Develop coverage| image:: https://codecov.io/gh/conan-io/conan/branch/develop/graph/badge.svg
-   :target: https://codecov.io/gh/conan-io/conan/branch/develop
-.. |Master coverage| image:: https://codecov.io/gh/conan-io/conan/branch/master/graph/badge.svg
-   :target: https://codecov.io/gh/conan-io/conan/branch/master
-.. |Coverage graph| image:: https://codecov.io/gh/conan-io/conan/branch/develop/graphs/tree.svg
-   :height: 50px
-   :width: 50 px
-   :alt: Conan develop coverage
 
